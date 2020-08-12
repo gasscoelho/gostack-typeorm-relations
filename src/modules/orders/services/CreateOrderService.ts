@@ -20,13 +20,64 @@ interface IRequest {
 @injectable()
 class CreateOrderService {
   constructor(
+    @inject('OrdersRepository')
     private ordersRepository: IOrdersRepository,
+    @inject('ProductsRepository')
     private productsRepository: IProductsRepository,
+    @inject('CustomersRepository')
     private customersRepository: ICustomersRepository,
   ) {}
 
   public async execute({ customer_id, products }: IRequest): Promise<Order> {
-    // TODO
+    const customer = await this.customersRepository.findById(customer_id);
+
+    if (!customer) {
+      throw new AppError('Customer not found.');
+    }
+
+    const productsMatchedWithId = await this.productsRepository.findAllById(
+      products,
+    );
+
+    if (!productsMatchedWithId) {
+      throw new AppError('Could not find products with given ID.');
+    } else if (productsMatchedWithId.length !== products.length) {
+      throw new AppError('Could not find all the products specified.');
+    }
+
+    const unavailableProductsQuantity = productsMatchedWithId.filter(
+      product =>
+        product.quantity < products.find(p => p.id === product.id)!!.quantity,
+    );
+
+    if (unavailableProductsQuantity.length > 0) {
+      throw new AppError(
+        `The following products do not have enough stock for the amount requested: ${unavailableProductsQuantity
+          .map(p => `${p.name}(${p.quantity})`)
+          .join(', ')}`,
+      );
+    }
+
+    const serializedProducts = productsMatchedWithId.map(product => ({
+      product_id: product.id,
+      price: product.price,
+      quantity: products.find(p => p.id === product.id)!!.quantity,
+    }));
+
+    const productsQuantityUpdated = productsMatchedWithId.map(product => ({
+      id: product.id,
+      quantity:
+        product.quantity - products.find(p => p.id === product.id)!!.quantity,
+    }));
+
+    await this.productsRepository.updateQuantity(productsQuantityUpdated);
+
+    const order = await this.ordersRepository.create({
+      customer,
+      products: serializedProducts,
+    });
+
+    return order;
   }
 }
 
